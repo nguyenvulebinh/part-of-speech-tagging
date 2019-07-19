@@ -10,7 +10,9 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from fairseq.modules import (
+    AdaptiveInput,
+)
 from fairseq import options, utils
 from fairseq.models import (
     FairseqDecoder,
@@ -129,13 +131,20 @@ class TransformerToneModel(BaseFairseqModel):
         src_dict, tgt_dict = task.source_dictionary, task.target_dictionary
 
         def build_embedding(dictionary, embed_dim, path=None):
-            num_embeddings = len(dictionary)
-            padding_idx = dictionary.pad()
-            emb = Embedding(num_embeddings, embed_dim, padding_idx)
-            # if provided, load from preloaded dictionaries
-            if path:
-                embed_dict = utils.parse_embedding(path)
-                utils.load_embedding(embed_dict, dictionary, emb)
+            if args.adaptive_input:
+                emb = AdaptiveInput(
+                    len(task.source_dictionary), task.source_dictionary.pad(), embed_dim,
+                    args.adaptive_input_factor, embed_dim,
+                    options.eval_str_list(args.adaptive_input_cutoff, type=int),
+                )
+            else:
+                num_embeddings = len(dictionary)
+                padding_idx = dictionary.pad()
+                emb = Embedding(num_embeddings, embed_dim, padding_idx)
+                # if provided, load from preloaded dictionaries
+                if path:
+                    embed_dict = utils.parse_embedding(path)
+                    utils.load_embedding(embed_dict, dictionary, emb)
             return emb
 
         if args.share_all_embeddings:
@@ -274,12 +283,23 @@ def base_architecture(args):
     args.activation_dropout = getattr(args, 'activation_dropout', 0.)
     args.activation_fn = getattr(args, 'activation_fn', 'relu')
     args.dropout = getattr(args, 'dropout', 0.1)
-    args.adaptive_softmax_cutoff = getattr(args, 'adaptive_softmax_cutoff', None)
+    args.share_input_output_embed = getattr(args, 'share_decoder_input_output_embed', False)
     args.adaptive_softmax_dropout = getattr(args, 'adaptive_softmax_dropout', 0)
-    args.share_decoder_input_output_embed = getattr(args, 'share_decoder_input_output_embed', False)
     args.share_all_embeddings = getattr(args, 'share_all_embeddings', False)
     args.no_token_positional_embeddings = getattr(args, 'no_token_positional_embeddings', False)
-    args.adaptive_input = getattr(args, 'adaptive_input', False)
 
     args.decoder_output_dim = getattr(args, 'decoder_output_dim', args.decoder_embed_dim)
     args.decoder_input_dim = getattr(args, 'decoder_input_dim', args.decoder_embed_dim)
+
+    # args.adaptive_input = getattr(args, 'adaptive_input', False)
+    args.adaptive_input = getattr(args, 'adaptive_input', True)
+    args.adaptive_input_factor = getattr(args, 'adaptive_input_factor', 4)
+    args.adaptive_input_cutoff = getattr(args, 'adaptive_input_cutoff', '5000, 20000')
+
+    args.adaptive_softmax = getattr(args, 'adaptive_softmax', True)
+    args.tie_adaptive_weights = getattr(args, 'tie_adaptive_weights', True)
+    args.adaptive_softmax_cutoff = getattr(args, 'adaptive_softmax_cutoff', '5000, 20000')
+    args.adaptive_softmax_dropout = getattr(args, 'adaptive_softmax_dropout', 0.2)
+    args.no_decoder_final_norm = getattr(args, 'no_decoder_final_norm', True)
+    args.tie_adaptive_proj = getattr(args, 'tie_adaptive_proj', True)
+    args.adaptive_softmax_factor = getattr(args, 'adaptive_softmax_factor', 4)

@@ -4,7 +4,8 @@ from fairseq import utils
 import torch
 from tqdm import tqdm
 
-checkpoint_path = './checkpoints/transformer/checkpoint18.pt'
+checkpoint_path = './checkpoints/transformer/checkpoint24.pt'
+adaptive_softmax_cutoff = [5000, 20000]
 
 
 def infer(task, sentences, use_cuda):
@@ -29,12 +30,24 @@ def infer(task, sentences, use_cuda):
     preds = model(batch['net_input']['src_tokens'].long())
     # Print top k predictions and their log-probabilities
     results = []
+
     for pred in preds[0]:
-        top_scores, top_labels = pred.topk(k=1)
-        for item in top_labels.squeeze(0).t():
-            results.append(task.target_dictionary.string(item))
+
+        ouput_indx = model.decoder.adaptive_softmax.head(pred).argmax(1)
+        print(ouput_indx)
+        for idx, tail_model in enumerate(model.decoder.adaptive_softmax.tail):
+
+            tail_input_idx = (model.decoder.adaptive_softmax.head(pred).argmax(1) == adaptive_softmax_cutoff[0] + idx) \
+                .nonzero() \
+                .view(-1)
+            if len(tail_input_idx) > 0:
+                tail_input = torch.index_select(pred, 0, tail_input_idx)
+                tail_output = tail_model(tail_input).argmax(1) + adaptive_softmax_cutoff[idx]
+                ouput_indx[tail_input_idx] = tail_output
+        results.append(task.target_dictionary.string(ouput_indx))
     # recovery order as input
     _, results = zip(*sorted(zip(batch['id'].tolist(), results)))
+    results = [' '.join(item.split()[:len(input_sen.split())]) for item, input_sen in zip(results, sentences)]
     return results
 
 
@@ -68,6 +81,7 @@ if __name__ == '__main__':
     print('| loading model from {}'.format(checkpoint_path))
     models, _model_args = checkpoint_utils.load_model_ensemble([checkpoint_path], task=task_tone_recovery)
     model = models[0]
+    model.eval()
     if use_cuda:
         model.cuda()
     print(model)
