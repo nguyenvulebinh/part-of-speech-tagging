@@ -10,7 +10,7 @@ Train a new model on one or across multiple GPUs.
 """
 import os
 
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
 
 from fairseq_cli import train
 import utils as postag_utils
@@ -35,7 +35,7 @@ if __name__ == '__main__':
         '--lr-scheduler', 'inverse_sqrt',
         '--weight-decay', '0.0001',
         '--criterion', 'adaptive_loss',
-        '--max-update', '50000',
+        '--max-update', '150000',
         '--warmup-updates', '4000',
         '--warmup-init-lr', '1e-07',
         '--adam-betas', '(0.9,0.98)',

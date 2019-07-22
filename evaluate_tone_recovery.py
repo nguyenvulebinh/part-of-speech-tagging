@@ -5,7 +5,7 @@ import torch
 from tqdm import tqdm
 
 checkpoint_path = './checkpoints/transformer/checkpoint24.pt'
-adaptive_softmax_cutoff = [5000, 20000]
+adaptive_softmax_cutoff = [5000, 15000, 30000]
 
 
 def infer(task, sentences, use_cuda):
@@ -34,7 +34,7 @@ def infer(task, sentences, use_cuda):
     for pred in preds[0]:
 
         ouput_indx = model.decoder.adaptive_softmax.head(pred).argmax(1)
-        print(ouput_indx)
+        # print(ouput_indx)
         for idx, tail_model in enumerate(model.decoder.adaptive_softmax.tail):
 
             tail_input_idx = (model.decoder.adaptive_softmax.head(pred).argmax(1) == adaptive_softmax_cutoff[0] + idx) \
@@ -90,20 +90,21 @@ if __name__ == '__main__':
     # with open('./data-bin/src-testx-w.txt') as file_test:
     #     lines = file_test.read().split('\n')
     #
-    # with open('./data-bin/tgt-testx-w.txt', 'w', encoding='utf-8') as file_tgt:
-    #     batch_size = 100
+    # for i in range(3):
+    #     with open('./data-bin/tgt-testx-w.txt_{}'.format(i), 'w', encoding='utf-8') as file_tgt:
+    #         batch_size = 1
     #
     #
-    #     def make_batch(items, group_size):
-    #         for i in range(0, len(items), group_size):
-    #             yield items[i:i + group_size]
+    #         def make_batch(items, group_size):
+    #             for i in range(0, len(items), group_size):
+    #                 yield items[i:i + group_size]
     #
     #
-    #     iter_input = make_batch(lines, group_size=batch_size)
-    #     for sentences in tqdm(iter_input, total=len(list(make_batch(lines, group_size=batch_size)))):
-    #         results = infer(task_tone_recovery, sentences, use_cuda)
-    #         for sen_result in results:
-    #             file_tgt.write('{}\n'.format(sen_result))
+    #         iter_input = make_batch(lines, group_size=batch_size)
+    #         for sentences in tqdm(iter_input, total=len(list(make_batch(lines, group_size=batch_size)))):
+    #             results = infer(task_tone_recovery, sentences, use_cuda)
+    #             for sen_result in results:
+    #                 file_tgt.write('{}\n'.format(sen_result))
 
     # infer sentence
     while True:
