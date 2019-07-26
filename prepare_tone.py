@@ -6,7 +6,23 @@ from fairseq import options, tasks, utils
 import os
 
 
-def main(args):
+def prepare_raw_data(args, word_src_dict, word_tgt_dict, char_dict):
+    def convert(src_file_path, tgt_file_path):
+        # Read file raw
+        with open(src_file_path, 'r', encoding='utf-8') as src_file:
+            with open(tgt_file_path, 'r', encoding='utf-8') as tgt_file:
+                src_lines = src_file.read().split('\n')
+                tgt_lines = tgt_file.read().split('\n')
+
+        print('Done read raw file. Start convert to indices\n')
+
+    if args.trainpref:
+        input_file = "{}{}".format(args.trainpref, ("." + args.source_lang))
+        output_file = "{}{}".format(args.trainpref, ("." + args.target_lang))
+        # convert(input_file, output_file)
+
+
+def prepare_dict(args):
     utils.import_user_module(args)
 
     print(args)
@@ -31,16 +47,6 @@ def main(args):
     def dict_path(lang):
         return dest_path("dict", lang) + ".txt"
 
-    # def build_dictionary(filenames, src=False, tgt=False):
-    #     assert src ^ tgt
-    #     return task.build_dictionary(
-    #         filenames,
-    #         workers=args.workers,
-    #         threshold=args.thresholdsrc if src else args.thresholdtgt,
-    #         nwords=args.nwordssrc if src else args.nwordstgt,
-    #         padding_factor=args.padding_factor,
-    #     )
-
     def build_dictionary(filenames, src=False, tgt=False, word_level=True):
         assert src ^ tgt
         return task.build_dict(
@@ -51,6 +57,13 @@ def main(args):
             nwords=args.nwordssrc if src else args.nwordstgt,
             padding_factor=args.padding_factor,
         )
+
+    if os.path.exists(dict_path(args.source_lang)) and \
+            os.path.exists(dict_path(args.target_lang)) and \
+            os.path.exists(os.path.join(args.destdir, 'dict_char.txt')):
+        return task.load_dictionary(dict_path(args.source_lang)), \
+               task.load_dictionary(dict_path(args.target_lang)), \
+               task.load_dictionary(os.path.join(args.destdir, 'dict_char.txt'))
 
     if not args.srcdict and os.path.exists(dict_path(args.source_lang)):
         raise FileExistsError(dict_path(args.source_lang))
@@ -97,12 +110,14 @@ def main(args):
 
     # print(src_dict)
     char_dict.save(os.path.join(args.destdir, 'dict_char.txt'))
+    return src_dict, tgt_dict, char_dict
 
 
 def cli_main():
     parser = options.get_preprocessing_parser()
     args = parser.parse_args()
-    main(args)
+    src_dict, tgt_dict, char_dict = prepare_dict(args)
+    prepare_raw_data(args, src_dict, tgt_dict, char_dict)
 
 
 if __name__ == "__main__":
@@ -113,9 +128,9 @@ if __name__ == "__main__":
         '--source-lang', 'src',
         '--target-lang', 'tgt',
         '--task', 'tone_recovery',
-        '--trainpref', 'data-bin/tone_recovery_ecom/raw_dev/train',
-        '--validpref', 'data-bin/tone_recovery_ecom/raw_dev/valid',
-        '--destdir', 'data-bin/tone_recovery_ecom/raw_dev/',
+        '--trainpref', 'data-bin/tone_recovery_ecom/raw/train',
+        '--validpref', 'data-bin/tone_recovery_ecom/raw/valid',
+        '--destdir', 'data-bin/tone_recovery_ecom/raw/',
         '--nwordstgt', '70000',
         '--nwordssrc', '70000',
         '--workers', '10',

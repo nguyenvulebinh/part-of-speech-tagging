@@ -18,6 +18,8 @@ from fairseq.models import (
 )
 from fairseq.models.transformer import Embedding, TransformerDecoder, Linear
 import torch
+import math
+
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
 
@@ -229,6 +231,16 @@ class TransformerDecoderStandalone(TransformerDecoder):
             if positions is not None:
                 positions = positions[:, -1:]
 
+        if self.training:
+            # Try dropout
+            # self.dictionary.unk()
+            size_raw = prev_output_tokens.size()
+            prev_output_tokens = prev_output_tokens.view(-1)
+            rand_index = torch.multinomial(prev_output_tokens.float(),
+                                           math.floor(self.dropout * len(prev_output_tokens)))
+            if rand_index.size(0) > 0:
+                prev_output_tokens[rand_index] = self.dictionary.unk()
+                prev_output_tokens = prev_output_tokens.view(size_raw)
         # embed tokens and positions
         x = self.embed_scale * self.embed_tokens(prev_output_tokens)
         batch_size, sentence_length, word_length = unused['src_char_tokens'].size()
@@ -239,8 +251,6 @@ class TransformerDecoderStandalone(TransformerDecoder):
         x = torch.cat([x, x_char], dim=-1)
         if self.project_in_combine_dim is not None:
             x = self.project_in_combine_dim(x)
-
-
 
         if positions is not None:
             x += positions

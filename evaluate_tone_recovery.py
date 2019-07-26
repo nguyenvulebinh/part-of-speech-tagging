@@ -2,31 +2,32 @@ from fairseq import checkpoint_utils, data, options, tasks
 import utils as postag_utils
 from fairseq import utils
 import torch
+from plugin.data import spell_correct_dataset
 from tqdm import tqdm
 
-checkpoint_path = './checkpoints/transformer/checkpoint18.pt'
+checkpoint_path = './checkpoints/transformer/checkpoint_best.pt'
 
 
 def infer(task, sentences, use_cuda):
     samples_list = [
-        {'id': idx, 'source': task.source_dictionary.encode_line(
-            sen, add_if_not_exist=False,
-        )}
-        for idx, sen in enumerate(sentences)
+        {
+            'id': idx,
+            'source': task.source_dictionary.encode_line(sen, add_if_not_exist=False).long(),
+            'source_char': [task.char_dict.encode_line(' '.join(list(word)),
+                                                       add_if_not_exist=False).long() for word in sen.split() + ['']]
+        } for idx, sen in enumerate(sentences)
     ]
 
     # Build mini-batch to feed to the model
-    batch = data.language_pair_dataset.collate(
-        samples=samples_list,  # bsz = 1
-        pad_idx=task.source_dictionary.eos(),
-        eos_idx=task.source_dictionary.eos(),
-        left_pad_source=False,
-        input_feeding=False,
+    batch = spell_correct_dataset.collate(
+        samples_list, pad_idx=task.source_dictionary.pad(), eos_idx=task.source_dictionary.eos(),
+        left_pad_source=True, left_pad_target=False,
+        input_feeding=True, word_max_length=15
     )
 
     # Feed batch to the model and get predictions
     batch = utils.move_to_cuda(batch) if use_cuda else batch
-    preds = model(batch['net_input']['src_tokens'].long())
+    preds = model(**batch['net_input'])
     # Print top k predictions and their log-probabilities
     results = []
     for pred in preds[0]:
@@ -43,16 +44,16 @@ if __name__ == '__main__':
 
     postag_utils.import_user_module('./plugin')
     sys.argv += [
-        './data-bin/tone_recovery_ecom/processed_cached/',
+        './data-bin/dict',
         '--user-dir', './plugin',
         '--task', 'tone_recovery',
-        '-a', 'transformer_tone',
+        # '-a', 'transformer_tone',
         '-s', 'src', '-t', 'tgt',
         '--max-tokens', '4000',
         # '--cpu'
     ]
 
-    parser = options.get_training_parser()
+    parser = options.get_eval_lm_parser()
     args = options.parse_args_and_arch(parser)
     utils.import_user_module(args)
 
@@ -68,6 +69,7 @@ if __name__ == '__main__':
     print('| loading model from {}'.format(checkpoint_path))
     models, _model_args = checkpoint_utils.load_model_ensemble([checkpoint_path], task=task_tone_recovery)
     model = models[0]
+    # model.eval()
     if use_cuda:
         model.cuda()
     print(model)
@@ -94,4 +96,5 @@ if __name__ == '__main__':
     # infer sentence
     while True:
         sentence = input('\nInput: ')
-        print(infer(task_tone_recovery, [sentence], use_cuda))
+        if len(sentence) > 0:
+            print(infer(task_tone_recovery, [sentence], use_cuda))

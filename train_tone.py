@@ -20,7 +20,7 @@ if __name__ == '__main__':
 
     postag_utils.import_user_module('./plugin')
     sys.argv += [
-        './data-bin/tone_recovery_ecom/raw_dev/',
+        './data-bin/tone_recovery_ecom/raw/',
         '--user-dir', './plugin',
         '--task', 'tone_recovery',
         '-a', 'transformer_tone',

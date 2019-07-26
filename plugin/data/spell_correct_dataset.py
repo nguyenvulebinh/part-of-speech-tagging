@@ -104,10 +104,9 @@ class SpellCorrectRawDataset(FairseqDataset):
             with open(tgt_file_path, 'r', encoding='utf-8') as tgt_file:
                 src_lines = src_file.read().split('\n')
                 tgt_lines = tgt_file.read().split('\n')
-
-        print('Done read raw file. Start convert to indices\n')
         # check number sample input == number sample output
         assert len(src_lines) == len(tgt_lines)
+        print('Done read raw file. Start convert to indices\n')
 
         src_indices = []
         tgt_indices = []
