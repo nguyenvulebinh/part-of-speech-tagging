@@ -1,6 +1,21 @@
 import os
 import sys
 import importlib
+import re
+
+SPACE_NORMALIZER = re.compile(r"\s+")
+
+
+def tokenize_line_word(line):
+    line = SPACE_NORMALIZER.sub(" ", line)
+    line = line.strip()
+    return line.split()
+
+
+def tokenize_line_char(line):
+    line = SPACE_NORMALIZER.sub("", line)
+    line = line.strip()
+    return list(line)
 
 
 def import_user_module(module_path):

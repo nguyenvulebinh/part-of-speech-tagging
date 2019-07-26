@@ -20,7 +20,7 @@ if __name__ == '__main__':
 
     postag_utils.import_user_module('./plugin')
     sys.argv += [
-        './data-bin/tone_recovery_ecom/processed_cached/',
+        './data-bin/tone_recovery_ecom/raw_dev/',
         '--user-dir', './plugin',
         '--task', 'tone_recovery',
         '-a', 'transformer_tone',
@@ -34,14 +34,13 @@ if __name__ == '__main__':
         '--lr-scheduler', 'inverse_sqrt',
         '--weight-decay', '0.0001',
         '--criterion', 'label_smoothed_cross_entropy',
-        '--max-update', '50000',
+        '--max-update', '150000',
         '--warmup-updates', '4000',
         '--warmup-init-lr', '1e-07',
         '--adam-betas', '(0.9,0.98)',
         '--save-dir', 'checkpoints/transformer',
         # '--dataset-impl', 'raw',
         '--share-all-embeddings',
-
 
 
 

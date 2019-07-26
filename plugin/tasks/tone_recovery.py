@@ -3,75 +3,14 @@ import os
 
 from fairseq import options, utils
 from fairseq.data import (
-    ConcatDataset,
     data_utils,
-    indexed_dataset,
-    LanguagePairDataset,
+    Dictionary
 )
 
+from utils import tokenize_line_char, tokenize_line_word
+
 from fairseq.tasks import FairseqTask, register_task
-
-
-def load_langpair_dataset(
-        data_path, split,
-        src, src_dict,
-        tgt, tgt_dict,
-        combine, dataset_impl, upsample_primary,
-        left_pad_source, left_pad_target, max_source_positions, max_target_positions,
-):
-    def split_exists(split, src, tgt, lang, data_path):
-        filename = os.path.join(data_path, '{}.{}-{}.{}'.format(split, src, tgt, lang))
-        return indexed_dataset.dataset_exists(filename, impl=dataset_impl)
-
-    src_datasets = []
-    tgt_datasets = []
-
-    for k in itertools.count():
-        split_k = split + (str(k) if k > 0 else '')
-
-        # infer langcode
-        if split_exists(split_k, src, tgt, src, data_path):
-            prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, src, tgt))
-        elif split_exists(split_k, tgt, src, src, data_path):
-            prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, tgt, src))
-        else:
-            if k > 0:
-                break
-            else:
-                raise FileNotFoundError('Dataset not found: {} ({})'.format(split, data_path))
-
-        src_datasets.append(indexed_dataset.make_dataset(prefix + src, impl=dataset_impl,
-                                                         fix_lua_indexing=True, dictionary=src_dict))
-        tgt_datasets.append(indexed_dataset.make_dataset(prefix + tgt, impl=dataset_impl,
-                                                         fix_lua_indexing=True, dictionary=tgt_dict))
-
-        print('| {} {} {}-{} {} examples'.format(data_path, split_k, src, tgt, len(src_datasets[-1])))
-
-        if not combine:
-            break
-
-    assert len(src_datasets) == len(tgt_datasets)
-
-    if len(src_datasets) == 1:
-        src_dataset, tgt_dataset = src_datasets[0], tgt_datasets[0]
-    else:
-        sample_ratios = [1] * len(src_datasets)
-        sample_ratios[0] = upsample_primary
-        src_dataset = ConcatDataset(src_datasets, sample_ratios)
-        tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
-
-    # check input size == target size
-    assert ((src_dataset.sizes == tgt_dataset.sizes).sum()) == len(tgt_dataset.sizes)
-    # check number sample input == number sample output
-    assert len(src_dataset.sizes) == len(tgt_dataset.sizes)
-    return LanguagePairDataset(
-        src_dataset, src_dataset.sizes, src_dict,
-        tgt_dataset, tgt_dataset.sizes, tgt_dict,
-        left_pad_source=left_pad_source,
-        left_pad_target=left_pad_target,
-        max_source_positions=max_source_positions,
-        max_target_positions=max_target_positions,
-    )
+from plugin.data.spell_correct_dataset import SpellCorrectRawDataset
 
 
 @register_task('tone_recovery')
@@ -103,10 +42,11 @@ class ToneRecoveryTask(FairseqTask):
                             help='amount to upsample primary dataset')
         # fmt: on
 
-    def __init__(self, args, src_dict, tgt_dict):
+    def __init__(self, args, src_dict, tgt_dict, char_dict):
         super().__init__(args)
         self.src_dict = src_dict
         self.tgt_dict = tgt_dict
+        self.char_dict = char_dict
 
     @classmethod
     def setup_task(cls, args, **kwargs):
@@ -135,19 +75,23 @@ class ToneRecoveryTask(FairseqTask):
         # load dictionaries
         src_dict = cls.load_dictionary(os.path.join(paths[0], 'dict.{}.txt'.format(args.source_lang)))
         tgt_dict = cls.load_dictionary(os.path.join(paths[0], 'dict.{}.txt'.format(args.target_lang)))
+        char_dict = cls.load_dictionary(os.path.join(paths[0], 'dict_char.txt'))
         assert src_dict.pad() == tgt_dict.pad()
         assert src_dict.eos() == tgt_dict.eos()
         assert src_dict.unk() == tgt_dict.unk()
         print('| [{}] dictionary: {} types'.format(args.source_lang, len(src_dict)))
         print('| [{}] dictionary: {} types'.format(args.target_lang, len(tgt_dict)))
 
-        return cls(args, src_dict, tgt_dict)
+        return cls(args, src_dict, tgt_dict, char_dict)
 
     def load_dataset(self, split, epoch=0, combine=False, **kwargs):
         """Load a given dataset split.
 
         Args:
             split (str): name of the split (e.g., train, valid, test)
+            :param split:
+            :param combine:
+            :param epoch:
         """
         paths = self.args.data.split(':')
         assert len(paths) > 0
@@ -156,18 +100,15 @@ class ToneRecoveryTask(FairseqTask):
         # infer langcode
         src, tgt = self.args.source_lang, self.args.target_lang
 
-        self.datasets[split] = load_langpair_dataset(
-            data_path, split, src, self.src_dict, tgt, self.tgt_dict,
-            combine=combine, dataset_impl=self.args.dataset_impl,
-            upsample_primary=self.args.upsample_primary,
-            left_pad_source=self.args.left_pad_source,
-            left_pad_target=self.args.left_pad_target,
-            max_source_positions=self.args.max_source_positions,
-            max_target_positions=self.args.max_target_positions,
-        )
-
-    def build_dataset_for_inference(self, src_tokens, src_lengths):
-        return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary)
+        self.datasets[split] = SpellCorrectRawDataset(src_file_path=os.path.join(data_path, "{}.{}".format(split, src)),
+                                                      tgt_file_path=os.path.join(data_path, "{}.{}".format(split, tgt)),
+                                                      dict=self.tgt_dict,
+                                                      char_dict=self.char_dict,
+                                                      left_pad_source=self.args.left_pad_source,
+                                                      left_pad_target=self.args.left_pad_target,
+                                                      max_source_positions=self.args.max_source_positions,
+                                                      max_target_positions=self.args.max_target_positions,
+                                                      word_max_length=self.args.word_max_length)
 
     def max_positions(self):
         """Return the max sentence length allowed by the task."""
@@ -182,3 +123,14 @@ class ToneRecoveryTask(FairseqTask):
     def target_dictionary(self):
         """Return the target :class:`~fairseq.data.Dictionary`."""
         return self.tgt_dict
+
+    @classmethod
+    def build_dict(cls, filenames, word_level=False, workers=1, threshold=-1, nwords=-1, padding_factor=8):
+        d = Dictionary()
+        for filename in filenames:
+            Dictionary.add_file_to_dictionary(filename,
+                                              d,
+                                              tokenize_line_word if word_level else tokenize_line_char,
+                                              workers)
+        d.finalize(threshold=threshold, nwords=nwords, padding_factor=padding_factor)
+        return d

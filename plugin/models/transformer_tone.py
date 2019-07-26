@@ -5,12 +5,8 @@
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
 
-import math
-
-import torch
-import torch.nn as nn
 import torch.nn.functional as F
-
+from plugin.models.word_encoder import CharCNN
 from fairseq import options, utils
 from fairseq.models import (
     FairseqDecoder,
@@ -20,8 +16,8 @@ from fairseq.models import (
     register_model_architecture,
     BaseFairseqModel,
 )
-from fairseq.models.transformer import Embedding, TransformerDecoder
-
+from fairseq.models.transformer import Embedding, TransformerDecoder, Linear
+import torch
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
 
@@ -160,26 +156,19 @@ class TransformerToneModel(BaseFairseqModel):
             #     tgt_dict, args.decoder_embed_dim, args.decoder_embed_path
             # )
 
+        char_model = CharCNN(alphabet_size=len(task.char_dict),
+                             pretrain_char_embedding=None,
+                             embedding_dim=args.char_embed_dim,
+                             hidden_dim=args.char_hidden_dim,
+                             dropout=args.dropout)
+
         # encoder = cls.build_encoder(args, src_dict, encoder_embed_tokens)
-        decoder = cls.build_decoder(args, tgt_dict, decoder_embed_tokens)
+        decoder = cls.build_decoder(args, tgt_dict, decoder_embed_tokens, char_model)
         return TransformerToneModel(decoder)
 
     @classmethod
-    def build_decoder(cls, args, tgt_dict, embed_tokens):
-        return TransformerDecoderStandalone(args, tgt_dict, embed_tokens)
-
-    def extract_features(self, src_tokens, src_lengths, prev_output_tokens, **kwargs):
-        """
-        Similar to *forward* but only return features.
-
-        Returns:
-            tuple:
-                - the decoder's features of shape `(batch, tgt_len, embed_dim)`
-                - a dictionary with any model-specific outputs
-        """
-        encoder_out = self.encoder(src_tokens, src_lengths=src_lengths, **kwargs)
-        features = self.decoder.extract_features(prev_output_tokens, encoder_out=encoder_out, **kwargs)
-        return features
+    def build_decoder(cls, args, tgt_dict, embed_tokens, char_model):
+        return TransformerDecoderStandalone(args, tgt_dict, embed_tokens, char_model)
 
     def output_layer(self, features, **kwargs):
         """Project features to the default output size (typically vocabulary size)."""
@@ -195,6 +184,31 @@ class TransformerToneModel(BaseFairseqModel):
 
 
 class TransformerDecoderStandalone(TransformerDecoder):
+
+    def __init__(self, args, dictionary, embed_tokens, char_model, no_encoder_attn=False):
+        super().__init__(args, dictionary, embed_tokens, no_encoder_attn=no_encoder_attn)
+        self.char_model = char_model
+        self.project_in_combine_dim = Linear(args.input_dim, args.decoder_embed_dim, bias=False)
+
+    def forward(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
+        """
+        Args:
+            prev_output_tokens (LongTensor): previous decoder outputs of shape
+                `(batch, tgt_len)`, for input feeding/teacher forcing
+            encoder_out (Tensor, optional): output from the encoder, used for
+                encoder-side attention
+            incremental_state (dict): dictionary used for storing state during
+                :ref:`Incremental decoding`
+
+        Returns:
+            tuple:
+                - the decoder's output of shape `(batch, tgt_len, vocab)`
+                - a dictionary with any model-specific outputs
+        """
+        x, extra = self.extract_features(prev_output_tokens, encoder_out, incremental_state, **unused)
+        x = self.output_layer(x)
+        return x, extra
+
     def extract_features(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
         """
                 Similar to *forward* but only return features.
@@ -217,9 +231,16 @@ class TransformerDecoderStandalone(TransformerDecoder):
 
         # embed tokens and positions
         x = self.embed_scale * self.embed_tokens(prev_output_tokens)
+        batch_size, sentence_length, word_length = unused['src_char_tokens'].size()
+        x_char = self.char_model(unused['src_char_tokens'].view(-1, word_length), None).view(batch_size,
+                                                                                             sentence_length,
+                                                                                             -1)
 
-        if self.project_in_dim is not None:
-            x = self.project_in_dim(x)
+        x = torch.cat([x, x_char], dim=-1)
+        if self.project_in_combine_dim is not None:
+            x = self.project_in_combine_dim(x)
+
+
 
         if positions is not None:
             x += positions
@@ -273,7 +294,7 @@ def base_architecture(args):
     args.attention_dropout = getattr(args, 'attention_dropout', 0.)
     args.activation_dropout = getattr(args, 'activation_dropout', 0.)
     args.activation_fn = getattr(args, 'activation_fn', 'relu')
-    args.dropout = getattr(args, 'dropout', 0.1)
+    args.dropout = getattr(args, 'dropout', 0.2)
     args.adaptive_softmax_cutoff = getattr(args, 'adaptive_softmax_cutoff', None)
     args.adaptive_softmax_dropout = getattr(args, 'adaptive_softmax_dropout', 0)
     args.share_decoder_input_output_embed = getattr(args, 'share_decoder_input_output_embed', False)
@@ -283,3 +304,7 @@ def base_architecture(args):
 
     args.decoder_output_dim = getattr(args, 'decoder_output_dim', args.decoder_embed_dim)
     args.decoder_input_dim = getattr(args, 'decoder_input_dim', args.decoder_embed_dim)
+    args.char_embed_dim = getattr(args, 'char_embed_dim', 256)
+    args.char_hidden_dim = getattr(args, 'char_hidden_dim', 512)
+    args.input_dim = getattr(args, 'input_dim', args.char_hidden_dim + args.decoder_embed_dim)
+    args.word_max_length = getattr(args, 'word_max_length', 15)
