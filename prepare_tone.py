@@ -179,10 +179,10 @@ def prepare_raw_data(args, word_src_dict, word_tgt_dict, char_dict):
             )
         )
 
-    # if args.trainpref:
-    #     make_binary_dataset(word_src_dict, args.trainpref, "train", args.source_lang, num_workers=args.workers,
-    #                         char_vocab=char_dict)
-    #     make_binary_dataset(word_tgt_dict, args.trainpref, "train", args.target_lang, num_workers=args.workers)
+    if args.trainpref:
+        make_binary_dataset(word_src_dict, args.trainpref, "train", args.source_lang, num_workers=args.workers,
+                            char_vocab=char_dict)
+        make_binary_dataset(word_tgt_dict, args.trainpref, "train", args.target_lang, num_workers=args.workers)
     if args.validpref:
         make_binary_dataset(word_src_dict, args.validpref, "valid", args.source_lang, num_workers=args.workers,
                             char_vocab=char_dict)

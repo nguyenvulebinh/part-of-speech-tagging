@@ -11,6 +11,30 @@ def collate(
     if len(samples) == 0:
         return {}
 
+    def collate_char_tokens(values, pad_idx, sentence_length,
+                            word_max_length, eos_idx=None, left_pad=False,
+                            move_eos_to_beginning=False):
+        """Convert a list of 1d tensors into a padded 2d tensor."""
+        size = word_max_length
+        res = values[0][0].new(len(values), sentence_length, size).fill_(pad_idx)
+
+        def copy_tensor(src, dst):
+            assert dst.numel() == src.numel(), "{} != {}".format(dst.numel(), src.numel())
+            if move_eos_to_beginning:
+                assert src[-1] == eos_idx
+                dst[0] = eos_idx
+                dst[1:] = src[:-1]
+            else:
+                dst.copy_(src)
+
+        for i, line in enumerate(values):
+            for j, v in enumerate(line):
+                if len(v) > word_max_length:
+                    v = v[-word_max_length:]
+                copy_tensor(v, res[i][sentence_length - len(line) + j][size - len(v):] if left_pad else
+                res[i][sentence_length - len(line) + j][:len(v)])
+        return res
+
     def merge(key, left_pad, move_eos_to_beginning=False):
         return data_utils.collate_tokens(
             [s[key] for s in samples],
@@ -19,7 +43,14 @@ def collate(
 
     id = torch.LongTensor([s['id'] for s in samples])
     src_tokens = merge('source', left_pad=left_pad_source)
-    src_char_tokens = torch.cat([s['source_char'].unsqueeze(0) for s in samples], 0)
+    # src_char_tokens = torch.cat([s['source_char'].unsqueeze(0) for s in samples], 0)
+    src_char_tokens = collate_char_tokens(values=[s['source_char'] for s in samples],
+                                          pad_idx=pad_idx,
+                                          word_max_length=15,
+                                          sentence_length=src_tokens.size(-1),
+                                          eos_idx=eos_idx,
+                                          left_pad=True,
+                                          move_eos_to_beginning=False)
     # sort by descending source length
     src_lengths = torch.LongTensor([s['source'].numel() for s in samples])
     src_lengths, sort_order = src_lengths.sort(descending=True)
