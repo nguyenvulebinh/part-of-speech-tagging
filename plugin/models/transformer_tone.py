@@ -20,7 +20,7 @@ from fairseq.models.transformer import Embedding, TransformerDecoder, Linear
 import torch
 import math
 
-DEFAULT_MAX_SOURCE_POSITIONS = 1024
+DEFAULT_MAX_SOURCE_POSITIONS = 10240
 DEFAULT_MAX_TARGET_POSITIONS = 1024
 
 
@@ -318,3 +318,4 @@ def base_architecture(args):
     args.char_hidden_dim = getattr(args, 'char_hidden_dim', 512)
     args.input_dim = getattr(args, 'input_dim', args.char_hidden_dim + args.decoder_embed_dim)
     args.word_max_length = getattr(args, 'word_max_length', 15)
+    args.max_source_positions = getattr(args, 'max_source_positions', 10240)

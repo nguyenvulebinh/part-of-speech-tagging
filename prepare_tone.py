@@ -4,22 +4,189 @@ Data pre-processing: build vocabularies and binarize training data.
 import utils as postag_utils
 from fairseq import options, tasks, utils
 import os
+from collections import Counter
+from fairseq.data import indexed_dataset
+from fairseq.binarizer import Binarizer, safe_readline
+from multiprocessing import Pool
+from utils import tokenize_line_char, tokenize_line_word
+import torch
+
+
+def dataset_dest_prefix(args, output_prefix, lang):
+    base = "{}/{}".format(args.destdir, output_prefix)
+    lang_part = (
+        ".{}-{}.{}".format(args.source_lang, args.target_lang, lang) if lang is not None else ""
+    )
+    return "{}{}".format(base, lang_part)
+
+
+def dataset_dest_file(args, output_prefix, lang, extension):
+    base = dataset_dest_prefix(args, output_prefix, lang)
+    return "{}.{}".format(base, extension)
+
+
+def str_to_bin(filename, dict, consumer, char_vocab, append_eos=True, reverse_order=False,
+               offset=0, end=-1):
+    nseq, ntok = 0, 0
+    replaced = Counter()
+
+    def replaced_consumer(word, idx):
+        if idx == dict.unk_index and word != dict.unk_word:
+            replaced.update([word])
+
+    def collate_char_tokens(values, pad_idx, sentence_length,
+                            word_max_length, eos_idx=None, left_pad=False,
+                            move_eos_to_beginning=False):
+        """Convert a list of 1d tensors into a padded 2d tensor."""
+        size = word_max_length
+        res = values[0][0].new(len(values), sentence_length, size).fill_(pad_idx)
+
+        def copy_tensor(src, dst):
+            assert dst.numel() == src.numel(), "{} != {}".format(dst.numel(), src.numel())
+            if move_eos_to_beginning:
+                assert src[-1] == eos_idx
+                dst[0] = eos_idx
+                dst[1:] = src[:-1]
+            else:
+                dst.copy_(src)
+
+        for i, line in enumerate(values):
+            for j, v in enumerate(line):
+                if len(v) > word_max_length:
+                    v = v[-word_max_length:]
+                copy_tensor(v, res[i][sentence_length - len(line) + j][size - len(v):] if left_pad else
+                res[i][sentence_length - len(line) + j][:len(v)])
+        return res
+
+    with open(filename, 'r', encoding='utf-8') as f:
+        f.seek(offset)
+        # next(f) breaks f.tell(), hence readline() must be used
+        line = safe_readline(f)
+        while line:
+            if end > 0 and f.tell() > end:
+                break
+            ids = dict.encode_line(
+                line=line,
+                line_tokenizer=tokenize_line_word,
+                add_if_not_exist=False,
+                consumer=replaced_consumer,
+                append_eos=append_eos,
+                reverse_order=reverse_order,
+            )
+            if char_vocab is not None:
+                ids_char = [char_vocab.encode_line(
+                    line=word,
+                    line_tokenizer=tokenize_line_char,
+                    add_if_not_exist=False,
+                    consumer=replaced_consumer,
+                    append_eos=append_eos,
+                    reverse_order=reverse_order,
+                ) for word in line.split() + ['']]
+
+                ids_char_pad = collate_char_tokens(values=[ids_char],
+                                                   pad_idx=char_vocab.pad(),
+                                                   word_max_length=15,
+                                                   sentence_length=len(ids),
+                                                   eos_idx=char_vocab.eos(),
+                                                   left_pad=True,
+                                                   move_eos_to_beginning=False)
+                ids = torch.cat([ids, ids_char_pad.view(-1)])
+            nseq += 1
+            ntok += len(ids)
+            consumer(ids)
+            line = f.readline()
+    return {'nseq': nseq, 'nunk': sum(replaced.values()), 'ntok': ntok, 'replaced': replaced}
+
+
+def binarize(args, filename, vocab, output_prefix, lang, offset, end, char_vocab, append_eos=True):
+    ds = indexed_dataset.make_builder(dataset_dest_file(args, output_prefix, lang, "bin"),
+                                      impl=args.dataset_impl, vocab_size=len(vocab))
+
+    def consumer(tensor):
+        ds.add_item(tensor)
+
+    res = str_to_bin(filename, vocab, consumer, char_vocab, append_eos=append_eos,
+                     offset=offset, end=end)
+    ds.finalize(dataset_dest_file(args, output_prefix, lang, "idx"))
+    return res
 
 
 def prepare_raw_data(args, word_src_dict, word_tgt_dict, char_dict):
-    def convert(src_file_path, tgt_file_path):
-        # Read file raw
-        with open(src_file_path, 'r', encoding='utf-8') as src_file:
-            with open(tgt_file_path, 'r', encoding='utf-8') as tgt_file:
-                src_lines = src_file.read().split('\n')
-                tgt_lines = tgt_file.read().split('\n')
+    def make_binary_dataset(vocab, input_prefix, output_prefix, lang, num_workers, char_vocab=None):
+        print("| [{}] Dictionary: {} types".format(lang, len(vocab) - 1))
+        if char_vocab is not None:
+            print("| [{}] Char Dictionary: {} types".format(lang, len(char_vocab) - 1))
+        n_seq_tok = [0, 0]
+        replaced = Counter()
 
-        print('Done read raw file. Start convert to indices\n')
+        def merge_result(worker_result):
+            replaced.update(worker_result["replaced"])
+            n_seq_tok[0] += worker_result["nseq"]
+            n_seq_tok[1] += worker_result["ntok"]
 
-    if args.trainpref:
-        input_file = "{}{}".format(args.trainpref, ("." + args.source_lang))
-        output_file = "{}{}".format(args.trainpref, ("." + args.target_lang))
-        # convert(input_file, output_file)
+        input_file = "{}{}".format(
+            input_prefix, ("." + lang) if lang is not None else ""
+        )
+        offsets = Binarizer.find_offsets(input_file, num_workers)
+        pool = None
+        if num_workers > 1:
+            pool = Pool(processes=num_workers - 1)
+            for worker_id in range(1, num_workers):
+                prefix = "{}{}".format(output_prefix, worker_id)
+                pool.apply_async(
+                    binarize,
+                    (
+                        args,
+                        input_file,
+                        vocab,
+                        prefix,
+                        lang,
+                        offsets[worker_id],
+                        offsets[worker_id + 1],
+                        char_vocab
+                    ),
+                    callback=merge_result
+                )
+            pool.close()
+
+        ds = indexed_dataset.make_builder(dataset_dest_file(args, output_prefix, lang, "bin"),
+                                          impl=args.dataset_impl, vocab_size=len(vocab))
+        merge_result(
+            str_to_bin(
+                input_file, vocab, lambda t: ds.add_item(t), char_vocab,
+                offset=0, end=offsets[1]
+            )
+        )
+        if num_workers > 1:
+            pool.join()
+            for worker_id in range(1, num_workers):
+                prefix = "{}{}".format(output_prefix, worker_id)
+                temp_file_path = dataset_dest_prefix(args, prefix, lang)
+                ds.merge_file_(temp_file_path)
+                os.remove(indexed_dataset.data_file_path(temp_file_path))
+                os.remove(indexed_dataset.index_file_path(temp_file_path))
+
+        ds.finalize(dataset_dest_file(args, output_prefix, lang, "idx"))
+
+        print(
+            "| [{}] {}: {} sents, {} tokens, {:.3}% replaced by {}".format(
+                lang,
+                input_file,
+                n_seq_tok[0],
+                n_seq_tok[1],
+                100 * sum(replaced.values()) / n_seq_tok[1],
+                vocab.unk_word,
+            )
+        )
+
+    # if args.trainpref:
+    #     make_binary_dataset(word_src_dict, args.trainpref, "train", args.source_lang, num_workers=args.workers,
+    #                         char_vocab=char_dict)
+    #     make_binary_dataset(word_tgt_dict, args.trainpref, "train", args.target_lang, num_workers=args.workers)
+    if args.validpref:
+        make_binary_dataset(word_src_dict, args.validpref, "valid", args.source_lang, num_workers=args.workers,
+                            char_vocab=char_dict)
+        make_binary_dataset(word_tgt_dict, args.validpref, "valid", args.target_lang, num_workers=args.workers)
 
 
 def prepare_dict(args):
@@ -130,10 +297,10 @@ if __name__ == "__main__":
         '--task', 'tone_recovery',
         '--trainpref', 'data-bin/tone_recovery_ecom/raw/train',
         '--validpref', 'data-bin/tone_recovery_ecom/raw/valid',
-        '--destdir', 'data-bin/tone_recovery_ecom/raw/',
+        '--destdir', 'data-bin/tone_recovery_ecom/preprocessed/',
         '--nwordstgt', '70000',
         '--nwordssrc', '70000',
-        '--workers', '10',
+        '--workers', '20',
         '--joined-dictionary',
     ]
     cli_main()

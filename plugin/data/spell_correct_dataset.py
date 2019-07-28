@@ -97,7 +97,7 @@ def collate(
 class SpellCorrectRawDataset(FairseqDataset):
     def __init__(self, src_file_path, tgt_file_path, dict, char_dict, word_max_length, left_pad_source=True,
                  left_pad_target=False,
-                 max_source_positions=1024, max_target_positions=1024, input_feeding=True,
+                 max_source_positions=10240, max_target_positions=1024, input_feeding=True,
                  remove_eos_from_source=False, append_eos_to_target=False, shuffle=True):
         # Read file raw
         with open(src_file_path, 'r', encoding='utf-8') as src_file:

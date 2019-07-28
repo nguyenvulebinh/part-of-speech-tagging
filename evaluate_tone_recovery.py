@@ -69,7 +69,7 @@ if __name__ == '__main__':
     print('| loading model from {}'.format(checkpoint_path))
     models, _model_args = checkpoint_utils.load_model_ensemble([checkpoint_path], task=task_tone_recovery)
     model = models[0]
-    # model.eval()
+    model.eval()
     if use_cuda:
         model.cuda()
     print(model)

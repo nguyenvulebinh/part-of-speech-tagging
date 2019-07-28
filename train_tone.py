@@ -20,7 +20,7 @@ if __name__ == '__main__':
 
     postag_utils.import_user_module('./plugin')
     sys.argv += [
-        './data-bin/tone_recovery_ecom/raw/',
+        './data-bin/tone_recovery_ecom/preprocessed/',
         '--user-dir', './plugin',
         '--task', 'tone_recovery',
         '-a', 'transformer_tone',
@@ -38,6 +38,7 @@ if __name__ == '__main__':
         '--warmup-updates', '4000',
         '--warmup-init-lr', '1e-07',
         '--adam-betas', '(0.9,0.98)',
+        '--max-source-positions', '10240',
         '--save-dir', 'checkpoints/transformer',
         # '--dataset-impl', 'raw',
         '--share-all-embeddings',
